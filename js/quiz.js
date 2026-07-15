@@ -12,6 +12,22 @@ if (typeof timeLeft === 'undefined') window.timeLeft = 30;
 if (typeof timer === 'undefined') window.timer = null;
 if (typeof questions === 'undefined') window.questions = [];
 
+// KEMAS KINI: Sediakan objek QuizManager global untuk mengawal status bermain/keluar
+if (typeof QuizManager === 'undefined') {
+    window.QuizManager = {
+        isPlaying: false,
+        currentLevel: 1,
+        score: 0,
+        stopTimer: function() {
+            if (window.timer) {
+                clearInterval(window.timer);
+                window.timer = null;
+                console.log("[QuizManager]: Pemasa berjaya dihentikan.");
+            }
+        }
+    };
+}
+
 if (typeof currentLevel === 'undefined') window.currentLevel = 1;
 if (typeof levels === 'undefined') {
     window.levels = {
@@ -41,60 +57,55 @@ function safeCall(funcName, ...args) {
 // Pendaftaran fungsi ke skop window tanpa konflik recursion
 window.cleanupGame = function() {
     if (typeof timer !== 'undefined' && timer) { clearInterval(timer); timer = null; }
+    if (window.QuizManager) window.QuizManager.stopTimer();
     if (typeof window.cleanupMiniGame === 'function') window.cleanupMiniGame();
 };
 
 window.playWarning = function() { 
+    if (!window.QuizManager || !window.QuizManager.isPlaying) return; // Sekatan keluar
     if (typeof window.audioWarning === 'function') window.audioWarning();
     else safeCall('audioWarning'); 
 };
 
 window.playCorrect = function() { 
-    window.playSound('correct');//bunyi betul
+    if (!window.QuizManager || !window.QuizManager.isPlaying) return; // Sekatan keluar
+    window.playSound('correct');
     if (typeof window.audioCorrect === 'function') window.audioCorrect();
     else if (typeof window.soundCorrect === 'function') window.soundCorrect();
     else safeCall('audioCorrect'); 
 };
 
 window.playWrong = function() { 
-    window.playSound('wrong');//bunyi salah
+    if (!window.QuizManager || !window.QuizManager.isPlaying) return; // Sekatan keluar
+    window.playSound('wrong');
     if (typeof window.audioWrong === 'function') window.audioWrong();
     else if (typeof window.soundWrong === 'function') window.soundWrong();
     else safeCall('audioWrong'); 
 };
 
-// Mengelakkan pusingan gelung tak terhingga (Infinite Loop)
-// Mengelakkan pusingan gelung tak terhingga & menyediakan pelan kecemasan jika UI transisi utama tiada
 window.showTransition = function(emoji, title, subtitle, duration, callback) {
+    if (!window.QuizManager || !window.QuizManager.isPlaying) return; // Sekatan keluar
     if (typeof window.displayTransition === 'function') {
         window.displayTransition(emoji, title, subtitle, duration, callback);
     } else {
         console.log(`[Transition Fallback]: ${emoji} ${title} - ${subtitle}`);
-        
-        // Pelan Kecemasan 1: Paparkan mesej pemberitahuan menggunakan fungsi asal pelayar
         alert(`${emoji} ${title}\n\n${subtitle}`);
-        
-        // Jalankan fungsi callback jika ada (contohnya memulakan kuiz semula atau beralih ke minigame)
         if (typeof callback === 'function') {
             callback();
         } 
-        // Pelan Kecemasan 2: Jika tiada callback dan teks mengandungi tanda tamat permainan (Misi Tamat)
         else if (title.includes("MISI TAMAT") || title.includes("TAMAT") || window.currentLevel >= 3) {
             console.log("[Quiz Engine]: Menamatkan permainan sepenuhnya. Kembali ke Menu Utama.");
-            
-            // Cuba bawa pengguna balik ke skrin menu utama
             if (typeof showScreen === 'function') {
-                showScreen('start-screen'); // Pastikan 'main-menu' sepadan dengan ID komponen skrin menu anda
+                showScreen('start-screen'); 
             } else {
-                // Pilihan terakhir sekiranya enjin skrin juga gagal: Muat semula aplikasi
                 location.reload();
             }
         }
     }
 };
 
-// Memastikan enjin executeMiniGameEngine dipanggil dengan selamat
 window.startMiniGame = function(lvl) {
+    if (!window.QuizManager || !window.QuizManager.isPlaying) return; // Sekatan keluar
     console.log(`[Quiz Engine]: Mengarahkan peralihan ke Flight Mission Tahap ${lvl}...`);
     
     if (typeof window.executeMiniGameEngine === 'function') {
@@ -159,6 +170,12 @@ function generateQuestions(level) {
 async function startQuiz() {
   window.cleanupGame(); 
   
+  // KEMAS KINI: Aktifkan bendera isPlaying semula sebaik kuiz bermula
+  if (window.QuizManager) {
+      window.QuizManager.isPlaying = true;
+      window.QuizManager.score = 0;
+  }
+  
   if (typeof showScreen === 'function') showScreen('quiz-screen'); 
   
   score = 0; 
@@ -177,8 +194,13 @@ async function startQuiz() {
   
   try {
       if (window.API && typeof window.API.getQuestionsFromSheet === 'function') {
-          // Menghantar window.currentLevel (1, 2, atau 3) ke api.js
           const res = await window.API.getQuestionsFromSheet(window.currentLevel);
+          
+          // KEMAS KINI PENGAMAN (ANTI HANTU API): Jika murid menekan butang keluar sewaktu fetching data, potong skrip!
+          if (window.QuizManager && !window.QuizManager.isPlaying) {
+              console.log("[Quiz Engine Guard]: Data Sheet tiba tetapi ditapis keluar kerana isPlaying = false.");
+              return;
+          }
           
           if (res && res.success && res.questions && res.questions.length > 0) {
               questions = res.questions;
@@ -190,6 +212,9 @@ async function startQuiz() {
           throw new Error("Pautan API (window.API.getQuestionsFromSheet) tidak ditemui");
       }
   } catch (err) {
+      // Sekat pelan kecemasan jika murid sebenarnya sudah keluar
+      if (window.QuizManager && !window.QuizManager.isPlaying) return;
+      
       console.warn(`Gagal memproses data Sheet untuk Tahap ${stringTahap} (${err.message}). Mengaktifkan pelan kecemasan lokal.`);
       questions = generateQuestions(window.currentLevel);
   }
@@ -203,6 +228,12 @@ async function startQuiz() {
 }
 
 function showQuestion() {
+  // KEMAS KINI PENGAMAN: Halang pembukaan soalan dan pembakaran pemasa baru jika murid telah keluar
+  if (window.QuizManager && !window.QuizManager.isPlaying) {
+      window.cleanupGame();
+      return;
+  }
+
   if (!questions || questions.length === 0 || !questions[currentQ]) {
       console.error("Soalan tidak dijumpai.");
       return;
@@ -241,17 +272,21 @@ function showQuestion() {
   if (timer) clearInterval(timer);
   
   timer = setInterval(() => { 
+    // KEMAS KINI PENGAMAN: Jika dikesan murid telah keluar di tengah jalan, bunuh interval serta merta
+    if (window.QuizManager && !window.QuizManager.isPlaying) {
+        clearInterval(timer);
+        timer = null;
+        return;
+    }
+
     timeLeft--; 
     updateTimerBar(); 
     
-    // =========================================================================
-    // EVENT 3: BUNYI DETIK JAM (COUNTDOWN) - 5 Saat Terakhir
-    // =========================================================================
     if (timeLeft <= 5 && timeLeft > 0) { 
         if (typeof window.playSound === 'function') {
-            window.playSound('countdown'); // Bip pendek retro setiap saat kritikal
+            window.playSound('countdown'); 
         } else {
-            window.playWarning(); // Fallback
+            window.playWarning(); 
         }
     } 
     
@@ -259,11 +294,8 @@ function showQuestion() {
       clearInterval(timer); 
       timer = null; 
       
-      // =========================================================================
-      // EVENT 2: BUNYI MASA TAMAT / GAME OVER
-      // =========================================================================
       if (typeof window.playSound === 'function') {
-          window.playSound('gameover'); // Kesan bunyi tamat masa retro
+          window.playSound('gameover'); 
       }
       
       selectAnswer(null, null); 
@@ -287,12 +319,14 @@ function updateTimerBar() {
 }
 
 function selectAnswer(ans, btn) {
+  if (window.QuizManager && !window.QuizManager.isPlaying) return; // Sekatan keluar
   if (timer) { clearInterval(timer); timer = null; }
   
   const correct = ans === questions[currentQ].answer;
   if (correct) {
     score++; 
     totalScore++; 
+    if (window.QuizManager) window.QuizManager.score = score;
     window.playCorrect();
   } else {
     window.playWrong();
@@ -307,6 +341,7 @@ function selectAnswer(ans, btn) {
 }
 
 function showFeedback(correct) {
+  if (window.QuizManager && !window.QuizManager.isPlaying) return; // Sekatan keluar
   const fb = document.getElementById('feedback');
   const box = document.getElementById('feedback-box');
   const text = document.getElementById('feedback-text');
@@ -320,6 +355,7 @@ function showFeedback(correct) {
   }
   
   setTimeout(() => { 
+    if (window.QuizManager && !window.QuizManager.isPlaying) return; // Sekatan keluar
     if (fb) fb.classList.add('hidden'); 
     currentQ++; 
     if (currentQ < questions.length && currentQ < 10) showQuestion(); 
@@ -328,6 +364,7 @@ function showFeedback(correct) {
 }
 
 function endQuiz() {
+  if (window.QuizManager && !window.QuizManager.isPlaying) return; // Sekatan keluar
   const totalQ = questions.length > 0 ? questions.length : 10;
   const pct = (score / totalQ) * 100;
   
@@ -339,11 +376,8 @@ function endQuiz() {
   }
 
   if (pct < 80) { 
-    // =========================================================================
-    // MAKLUM BALAS KEKALAHAN: Gagal mencapai 80%
-    // =========================================================================
     if (typeof window.playSound === 'function') {
-        window.playSound('gameover'); // Bunyi kecewa/kalah retro
+        window.playSound('gameover'); 
     }
 
     window.showTransition(
@@ -351,17 +385,15 @@ function endQuiz() {
       `${score}/${totalQ} (${pct.toFixed(0)}%)`, 
       'Anda memerlukan sekurang-kurangnya 80% markah betul untuk membuka Flight Mission. Cuba lagi!', 
       3500, 
-      () => window.startQuiz()
+      () => {
+          if (window.QuizManager && window.QuizManager.isPlaying) window.startQuiz();
+      }
     ); 
   } else {
-    // =========================================================================
-    // EVENT 1: BUNYI KEMENANGAN (PASUKAN AIRFORCE NAIK TAHAP)
-    // =========================================================================
     if (typeof window.playSound === 'function') {
-        // Gabungan bunyi kaching berturut-turut menghasilkan melodi sorakan gembira!
         window.playSound('correct');
-        setTimeout(() => window.playSound('correct'), 150);
-        setTimeout(() => window.playSound('correct'), 300);
+        setTimeout(() => { if (window.QuizManager && window.QuizManager.isPlaying) window.playSound('correct'); }, 150);
+        setTimeout(() => { if (window.QuizManager && window.QuizManager.isPlaying) window.playSound('correct'); }, 300);
     }
 
     window.showTransition(
@@ -370,7 +402,7 @@ function endQuiz() {
       `Markah anda cemerlang (${pct.toFixed(0)}%). Bersiap sedia untuk Flight Mission Tahap ${window.currentLevel}!`, 
       2500, 
       () => {
-          if (typeof window.startMiniGame === 'function') {
+          if (window.QuizManager && window.QuizManager.isPlaying && typeof window.startMiniGame === 'function') {
               window.startMiniGame(window.currentLevel);
           }
       }
