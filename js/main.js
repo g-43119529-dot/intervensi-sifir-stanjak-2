@@ -89,6 +89,7 @@ window.startGame = function() {
     window.currentLevel = 1;
     if (window.QuizManager) {
         window.QuizManager.currentLevel = 1;
+        window.QuizManager.isPlaying = true; // KEMAS KINI: Aktifkan bendera QuizManager bermula
     }
 
     // 2. RESET MARKAH: Kosongkan semua takungan markah kuiz & minigame menjadi 0
@@ -120,7 +121,6 @@ window.startGame = function() {
     }
 };
 
-
 // Dipanggil apabila butang "Hall of Fame" diklik dari menu utama
 window.showHallOfFame = function() {
     console.log("[Fame Engine]: Membuka skrin Leaderboard secara automatik.");
@@ -143,23 +143,37 @@ window.logoutKeLogin = function() {
 
 // Dipanggil apabila butang "Keluar" diklik semasa kuiz/minigame berjalan
 window.exitToStart = async function() {
-    // KEMAS KINI: Semak jika murid sedang melihat Hall of Fame (fame-screen)
     const fameScreenEl = document.getElementById('fame-screen');
     const isAtFameScreen = fameScreenEl && !fameScreenEl.classList.contains('hidden');
 
-    // JIKA DI SKRIN HALL OF FAME: Terus hantar ke login tanpa dialog box
     if (isAtFameScreen) {
         console.log("[Exit Engine]: Meninggalkan Hall of Fame. Terus beralih ke skrin log masuk.");
-        if (window.GAME) window.GAME.session = null; // Kosongkan sesi lama murid
+        if (window.GAME) window.GAME.session = null; 
         showScreen('login-screen');
-        return; // Hentikan fungsi di sini
+        return; 
     }
 
-    // JIKA DI SKRIN KUIZ / MINIGAME: Kekalkan dialog box pengesahan asal
     console.log("[Exit Engine]: Menekan butang keluar kuiz/minigame.");
+
+    // Hentikan sementara pemasa kuiz/minigame sewaktu dialog `confirm` dibuka
+    if (window.QuizManager && typeof window.QuizManager.stopTimer === 'function') {
+        window.QuizManager.stopTimer();
+    }
+    if (window.timer) {
+        clearInterval(window.timer);
+    }
+    if (window.timerInterval) {
+        clearInterval(window.timerInterval);
+    }
+
     const sahkanKeluar = confirm("Anda pasti mahu berhenti menjawab kuiz ini?");
     
     if (sahkanKeluar) {
+        // KEMAS KINI MUTLAK: Matikan isPlaying dengan serta-merta sejurus disahkan keluar
+        if (window.QuizManager) {
+            window.QuizManager.isPlaying = false;
+        }
+
         let markahTahapSemasa = 0;
         
         if (window.QuizManager) {
@@ -201,21 +215,37 @@ window.exitToStart = async function() {
             window.GAME.session.score = markahSebenar;
             window.GAME.session.levelTertinggi = tahapSemasa;
             
+            // Sertakan parameter markah & tahap dinamik ke fungsi penghantaran data
             if (typeof window.hantarDataKeGoogleSheets === 'function') {
-                await window.hantarDataKeGoogleSheets();
+                await window.hantarDataKeGoogleSheets(markahSebenar, tahapSemasa);
             }
         }
         
+        // Bersihkan sesi secara menyeluruh
+        if (window.GAME) window.GAME.session = null;
+        if (typeof window.cleanupGame === 'function') window.cleanupGame(); // Bersihkan sebarang pemasa tertinggal
+        
         showScreen('login-screen');
+    } else {
+        console.log("[Exit Engine]: Murid membatalkan proses keluar. Menyambung kuiz...");
+        if (window.QuizManager) {
+            window.QuizManager.isPlaying = true; // Aktifkan semula status main jika batal keluar
+            
+            // Hidupkan semula paparan soalan semasa bagi mencetuskan pemasa baru dengan betul
+            if (typeof window.showQuestion === 'function') {
+                window.showQuestion();
+            } else if (typeof window.QuizManager.startTimer === 'function') {
+                window.QuizManager.startTimer();
+            }
+        }
     }
 };
 
-
 // =========================================================================
-// ENJIN INTEGRASI GOOGLE SHEETS & VISUAL LEADERBOARD (KEMAS KINI TOP 20)
+// ENJIN INTEGRASI GOOGLE SHEETS & VISUAL LEADERBOARD (DINAMIK & BEBAS RALAT)
 // =========================================================================
 
-window.hantarDataKeGoogleSheets = async function() {
+window.hantarDataKeGoogleSheets = async function(skorDinamik = 0, levelDinamik = 1) {
     console.log("[Sheets Engine]: Mencuba menghantar data sesi ke Google Sheets...");
     
     const scriptUrl = window.API_URL || window.SCRIPT_URL || window.BASE_URL || (window.CONFIG && window.CONFIG.url);
@@ -226,26 +256,26 @@ window.hantarDataKeGoogleSheets = async function() {
     }
 
     try {
-        // AMBIL DATA DARI STRUKTUR CONFIG.JS YANG SEBENAR
         const muridId = (window.GAME && window.GAME.student && window.GAME.student.id) || "TIADA_ID";
         const muridNama = (window.GAME && window.GAME.student && window.GAME.student.nama) || "Murid Sifir";
         
-        let masaTamat = 120;
-        if (window.GAME && window.GAME.session && window.GAME.session.duration) {
-            masaTamat = window.GAME.session.duration;
+        let masaMengjawab = 0;
+        if (window.GAME && window.GAME.session && window.GAME.session.waktuMula) {
+            // Hitung beza masa tamat dengan waktu mula permainan dalam unit saat
+            masaMengjawab = Math.floor((Date.now() - window.GAME.session.waktuMula) / 1000);
         }
 
+        // KEMAS KINI MUTLAK: Menggunakan nilai dinamik sebenar hasil dari permainan
         const payload = {
             action: "saveScore",
-            tarikh: new Date().toLocaleDateString('ms-MY'), // Tarikh format tempatan
-            idMurid: muridId,                              // Lajur B: ID_MURID yang log masuk
-            nama: muridNama,                               // Lajur C: NAMA murid yang log masuk
-            skor: 30,                                      // Lajur D: SKOR (Muktamad 30)
-            level: 3,                                      // Lajur E: LEVEL
-            miniGame: masaTamat                            // Lajur F: JUMLAH MASA (saat)
+            tarikh: new Date().toLocaleDateString('ms-MY'), 
+            idMurid: muridId,                               
+            nama: muridNama,                               
+            skor: skorDinamik,                             
+            level: levelDinamik,                           
+            miniGame: masaMengjawab                        
         };
 
-        // Lakukan hantaran data ke Google Sheets
         await fetch(scriptUrl, {
             method: "POST",
             mode: "no-cors", 
@@ -257,7 +287,7 @@ window.hantarDataKeGoogleSheets = async function() {
         return { success: true };
 
     } catch (error) {
-        error.toString();
+        console.error("[Sheets Engine Error]: Gagal menghantar rekod.", error);
         return { success: false, error: error.toString() };
     }
 };
@@ -269,7 +299,7 @@ window.paparLeaderboardVisual = async function() {
     fameListEl.innerHTML = '<p class="text-cyan-300 text-xs text-center animate-pulse py-4">🛰️ Menghubungi satelit data Hall of Fame...</p>';
 
     try {
-        const scriptUrl = window.API_URL || (window.API && window.API.url);
+        const scriptUrl = window.API_URL || (window.API && window.API.url) || window.SCRIPT_URL;
         if (!scriptUrl) throw new Error("URL API tidak dikonfigurasi.");
 
         const response = await fetch(`${scriptUrl}?action=getLeaderboard`);
@@ -287,8 +317,8 @@ window.paparLeaderboardVisual = async function() {
             if (index === 1) pingat = '🥈';
             if (index === 2) pingat = '🥉';
 
-            let minit = Math.floor(row.jumlahMasa / 60);
-            let saat = Math.floor(row.jumlahMasa % 60);
+            let minit = Math.floor((row.jumlahMasa || row.miniGame || 0) / 60);
+            let saat = Math.floor((row.jumlahMasa || row.miniGame || 0) % 60);
             let paparanMasa = `${minit}m ${saat}s`;
 
             htmlContent += `
@@ -325,7 +355,7 @@ window.paparLeaderboardDiStartScreen = async function() {
     startFameList.innerHTML = '<div class="text-xs text-cyan-300 text-center animate-pulse py-4">🛰️ Menyelaras Kedudukan Top 5...</div>';
 
     try {
-        const scriptUrl = window.API_URL || (window.API && window.API.url);
+        const scriptUrl = window.API_URL || (window.API && window.API.url) || window.SCRIPT_URL;
         if (!scriptUrl) throw new Error("URL API tidak ditemui.");
 
         const response = await fetch(`${scriptUrl}?action=getLeaderboard`);
@@ -336,7 +366,6 @@ window.paparLeaderboardDiStartScreen = async function() {
             return;
         }
 
-        // Ambil data kedudukan 5 teratas sahaja
         const top5 = data.slice(0, 5);
         let htmlContent = '';
 
@@ -359,8 +388,8 @@ window.paparLeaderboardDiStartScreen = async function() {
                 warnaSkor = 'text-amber-600 font-bold';
             }
 
-            let minit = Math.floor(row.jumlahMasa / 60);
-            let saat = Math.floor(row.jumlahMasa % 60);
+            let minit = Math.floor((row.jumlahMasa || row.miniGame || 0) / 60);
+            let saat = Math.floor((row.jumlahMasa || row.miniGame || 0) % 60);
             let paparanMasa = `${minit}m ${saat}s`;
 
             htmlContent += `
@@ -411,7 +440,6 @@ window.togglePasswordVisibility = function() {
         if (eyeIconClose) eyeIconClose.classList.add('hidden');
     }
 };
-
 
 // =========================================================================
 // ENJIN PENGURUS AUDIO (REVOLUSI AUDIO SINTETIK - BEBAS RALAT & CODES)
